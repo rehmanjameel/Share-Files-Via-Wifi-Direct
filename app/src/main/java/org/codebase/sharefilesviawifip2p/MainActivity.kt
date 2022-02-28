@@ -1,24 +1,38 @@
 package org.codebase.sharefilesviawifip2p
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
-import android.net.wifi.p2p.WifiP2pDeviceList
 import android.net.wifi.p2p.WifiP2pManager
 import android.os.Bundle
+import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.widget.ArrayAdapter
-import android.widget.Toast
+import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
 import kotlinx.android.synthetic.main.activity_main.*
 import org.codebase.sharefilesviawifip2p.broadcastreceiver.WIFIDirectBroadCastReceiver
-
+import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+@SuppressLint("StaticFieldLeak")
+lateinit var messageText: TextView
 
 class MainActivity : AppCompatActivity() {
 
@@ -27,13 +41,22 @@ class MainActivity : AppCompatActivity() {
     private var broadcastReceiver: BroadcastReceiver? = null
     private var intentFilter: IntentFilter? = null
 
+    private lateinit var socket: Socket
     private val peersList: ArrayList<WifiP2pDevice> = ArrayList()
     private lateinit var deviceNameArray: Array<String>
     private lateinit var deviceArray: Array<WifiP2pDevice>
 
+    private lateinit var clientClass: ClientClass
+    private lateinit var serverConnection: ServerConnection
+
+    var isHost = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        messageText = findViewById(R.id.receivedMessageId)
+        checkPermissions()
 
         initialWork()
 
@@ -44,6 +67,52 @@ class MainActivity : AppCompatActivity() {
 
         deviceDiscoverButtonId.setOnClickListener {
             discoverPeers()
+        }
+
+        devicesListViewId.setOnItemClickListener { adapterView, view, i, l ->
+            val device: WifiP2pDevice = deviceArray[i]
+            val wifiP2pConfig = WifiP2pConfig()
+            wifiP2pConfig.deviceAddress = device.deviceAddress
+            wifiChannel.also { channel ->
+                wifiP2pManager?.connect(channel, wifiP2pConfig, object :WifiP2pManager.ActionListener{
+                    override fun onSuccess() {
+                        connectionStatusId.text = "${device.deviceAddress} is connected"
+                    }
+
+                    override fun onFailure(reason: Int) {
+                        connectionStatusId.text = "Connection Failed $reason"
+                    }
+                })
+
+            }
+        }
+
+        sendMessageButtonId.setOnClickListener {
+            val executorService: ExecutorService = Executors.newSingleThreadExecutor()
+            val message = messageEditTextId.text.toString()
+
+            executorService.execute(Runnable {
+                if (message.isNotEmpty() && isHost) {
+                    serverConnection.writeMessage(message.encodeToByteArray())
+                } else if (message.isNotEmpty() && !isHost) {
+                    clientClass.writeMessage(message.encodeToByteArray())
+                } else {
+                    messageEditTextId.error = "Enter Message First"
+                }
+            })
+
+        }
+    }
+
+    private fun checkPermissions(){
+        if (ActivityCompat.checkSelfPermission(this,
+                android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+                ActivityCompat.checkSelfPermission(this,
+                android.Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+
+                    ActivityCompat.requestPermissions(this,
+            arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION,
+                android.Manifest.permission.ACCESS_COARSE_LOCATION), 1)
         }
     }
 
@@ -83,7 +152,9 @@ class MainActivity : AppCompatActivity() {
             peersList.addAll(wifiP2pDeviceList.deviceList)
 
             deviceNameArray = arrayOf(arrayOf(wifiP2pDeviceList.deviceList.size).toString())
+            deviceArray = arrayOf(wifiP2pDeviceList.deviceList as WifiP2pDevice)
             Log.e("Device", deviceNameArray.toString())
+            Log.e("Device", deviceArray.size.toString())
             val index = 0
 
             for (device: WifiP2pDevice in wifiP2pDeviceList.deviceList) {
@@ -108,6 +179,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    val connectionInfoListener = WifiP2pManager.ConnectionInfoListener { wifiP2pInfo ->
+        val groupOwnerAddress: InetAddress = wifiP2pInfo.groupOwnerAddress
+
+        if (wifiP2pInfo.groupFormed && wifiP2pInfo.isGroupOwner) {
+            connectionStatusId.text = "Host"
+            isHost = true
+            serverConnection = ServerConnection()
+            serverConnection.start()
+        } else if (wifiP2pInfo.groupFormed) {
+            connectionStatusId.text = "Client"
+            isHost = false
+
+            clientClass = ClientClass(groupOwnerAddress)
+            clientClass.start()
+        }
+    }
+
     /* register the broadcast receiver with the intent values to be matched */
     override fun onResume() {
         super.onResume()
@@ -121,6 +209,115 @@ class MainActivity : AppCompatActivity() {
         super.onPause()
         broadcastReceiver?.also { receiver ->
             unregisterReceiver(receiver)
+        }
+    }
+
+    //Server Connection Class
+    class ServerConnection() : Thread() {
+        var serverSocket : ServerSocket? = null
+        var socket: Socket? = null
+        var inputStream: InputStream? = null
+        var outPutStream: OutputStream? = null
+
+        fun writeMessage(byteArray: ByteArray) {
+            try {
+                outPutStream!!.write(byteArray)
+            } catch (e: IOException) {
+                e.printStackTrace()
+            }
+        }
+
+        override fun run() {
+            try {
+                serverSocket = ServerSocket(8888)
+                socket = serverSocket!!.accept()
+                inputStream = socket!!.getInputStream()
+                outPutStream = socket!!.getOutputStream()
+
+            } catch (e: IOException) {
+                e.printStackTrace()
+            }
+
+            val executorService : ExecutorService = Executors.newSingleThreadExecutor()
+            val handler = Handler(Looper.getMainLooper())
+
+            executorService.execute(Runnable {
+                val buffer = ByteArray(1024)
+                var bytes : Int
+
+                var isSocket = true
+
+                while (isSocket) {
+                    try {
+                        bytes = inputStream?.read(buffer) ?: 0
+                        if (bytes > 0) {
+                            val finalBytes: Int = bytes
+                            handler.post(Runnable {
+                                val tempMessage = String(buffer, 0, finalBytes)
+                                messageText.text = tempMessage
+                            })
+                        }
+                    } catch (e: IOException) {
+                        e.printStackTrace()
+                    }
+                }
+            })
+        }
+    }
+
+    //Create the client Class
+    class ClientClass(hostAddress: InetAddress) : Thread() {
+        var hostAdd: String = hostAddress.hostAddress!!
+
+        private var inputStream: InputStream? = null
+        private var outPutStream: OutputStream? = null
+
+        val socket = Socket()
+
+        fun writeMessage(byteArray: ByteArray) {
+            try {
+                outPutStream!!.write(byteArray)
+            } catch (e: IOException) {
+                e.printStackTrace()
+            }
+        }
+
+        override fun run() {
+
+            try {
+                socket.connect(InetSocketAddress(hostAdd, 8888), 500)
+                inputStream = socket.getInputStream()
+                outPutStream = socket.getOutputStream()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            val executor: ExecutorService = Executors.newSingleThreadExecutor()
+
+            val handler = Handler(Looper.getMainLooper())
+
+            executor.execute(Runnable {
+                val buffer = ByteArray(1024)
+
+                var bytesRead: Int
+
+                var isSocket = true
+                while (isSocket) {
+                    try {
+                        bytesRead = inputStream?.read(buffer) ?: 0
+                        if (bytesRead > 0) {
+                            val finalBytes = bytesRead
+                            handler.post {
+                                val tempMessage = String(buffer, 0, finalBytes)
+                                messageText.text = tempMessage
+                            }
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        isSocket = false
+                    }
+                }
+            })
         }
     }
 

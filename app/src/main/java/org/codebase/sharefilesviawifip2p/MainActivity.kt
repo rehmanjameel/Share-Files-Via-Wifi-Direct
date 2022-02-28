@@ -1,15 +1,14 @@
 package org.codebase.sharefilesviawifip2p
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
+import android.content.*
 import android.content.pm.PackageManager
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -17,11 +16,19 @@ import android.provider.Settings
 import android.util.Log
 import android.widget.ArrayAdapter
 import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.result.ActivityResultCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.textfield.TextInputEditText
 import kotlinx.android.synthetic.main.activity_main.*
 import org.codebase.sharefilesviawifip2p.broadcastreceiver.WIFIDirectBroadCastReceiver
+import org.codebase.sharefilesviawifip2p.filepickerhelper.FilePickerHelper
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -31,19 +38,28 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+
+
 @SuppressLint("StaticFieldLeak")
-lateinit var messageText: TextView
+lateinit var receivedMessageText: TextView
+@SuppressLint("StaticFieldLeak")
+lateinit var messageEditText: TextInputEditText
+private var fileUri: String? = ""
+
+@RequiresApi(Build.VERSION_CODES.JELLY_BEAN)
 
 class MainActivity : AppCompatActivity() {
 
+    val REQUEST_ID_MULTIPLE_PERMISSIONS = 1
     private var wifiP2pManager: WifiP2pManager? = null
     private var wifiChannel : WifiP2pManager.Channel? = null
     private var broadcastReceiver: BroadcastReceiver? = null
     private var intentFilter: IntentFilter? = null
 
-    private lateinit var socket: Socket
+//    private lateinit var socket: Socket
     private val peersList: ArrayList<WifiP2pDevice> = ArrayList()
     private lateinit var deviceNameArray: Array<String>
+    lateinit var pickedFilePath: TextView
     private lateinit var deviceArray: Array<WifiP2pDevice>
 
     private lateinit var clientClass: ClientClass
@@ -51,11 +67,15 @@ class MainActivity : AppCompatActivity() {
 
     var isHost = false
 
+    @RequiresApi(Build.VERSION_CODES.KITKAT)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        messageText = findViewById(R.id.receivedMessageId)
+        receivedMessageText = findViewById(R.id.receivedMessageId)
+        messageEditText = findViewById(R.id.messageEditTextId)
+        pickedFilePath = findViewById(R.id.pickedFilePathTextId)
+
         checkPermissions()
 
         initialWork()
@@ -100,20 +120,114 @@ class MainActivity : AppCompatActivity() {
                     messageEditTextId.error = "Enter Message First"
                 }
             })
+            messageEditText.setText("")
+        }
 
+        //FilePicker Button Click listener
+        filePickerButtonId.setOnClickListener {
+            filePicker()
         }
     }
 
-    private fun checkPermissions(){
-        if (ActivityCompat.checkSelfPermission(this,
-                android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
-                ActivityCompat.checkSelfPermission(this,
-                android.Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+    private fun checkPermissions() : Boolean {
 
-                    ActivityCompat.requestPermissions(this,
-            arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION,
-                android.Manifest.permission.ACCESS_COARSE_LOCATION), 1)
+        val accessFineLocationPermission: Int = ActivityCompat.checkSelfPermission(this,
+            Manifest.permission.ACCESS_FINE_LOCATION)
+
+        val accessCoarsePermission: Int = ActivityCompat.checkSelfPermission(this,
+            Manifest.permission.ACCESS_COARSE_LOCATION)
+
+        val externalStorageReadPermission: Int = ActivityCompat.checkSelfPermission(this,
+            Manifest.permission.READ_EXTERNAL_STORAGE)
+
+        val externalStorageWritePermission: Int = ActivityCompat.checkSelfPermission(this,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE)
+
+        val listPermissionsNeeded: ArrayList<String> = ArrayList()
+
+        if (accessFineLocationPermission != PackageManager.PERMISSION_GRANTED) {
+            listPermissionsNeeded.add(Manifest.permission.ACCESS_FINE_LOCATION)
         }
+        if (accessCoarsePermission != PackageManager.PERMISSION_GRANTED) {
+            listPermissionsNeeded.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
+        if (externalStorageReadPermission != PackageManager.PERMISSION_GRANTED) {
+            listPermissionsNeeded.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        if (externalStorageWritePermission != PackageManager.PERMISSION_GRANTED) {
+            listPermissionsNeeded.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+
+        if (listPermissionsNeeded.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, listPermissionsNeeded.toTypedArray(), REQUEST_ID_MULTIPLE_PERMISSIONS)
+            return false
+        }
+        return true
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+
+        when (requestCode) {
+            REQUEST_ID_MULTIPLE_PERMISSIONS -> {
+                val permissionMap : HashMap<String, Int> = HashMap()
+                // Initialize the map with permissions
+                permissionMap[Manifest.permission.ACCESS_FINE_LOCATION] = PackageManager.PERMISSION_GRANTED
+                permissionMap[Manifest.permission.ACCESS_COARSE_LOCATION] = PackageManager.PERMISSION_GRANTED
+                permissionMap[Manifest.permission.READ_EXTERNAL_STORAGE] = PackageManager.PERMISSION_GRANTED
+                permissionMap[Manifest.permission.WRITE_EXTERNAL_STORAGE] = PackageManager.PERMISSION_GRANTED
+
+                if (grantResults.isNotEmpty()) {
+                    for (i in permissions.indices) {
+                        permissionMap[permissions[i]] = grantResults[i]
+                    }
+
+                    if (permissionMap[Manifest.permission.ACCESS_FINE_LOCATION] == PackageManager.PERMISSION_GRANTED &&
+                        permissionMap[Manifest.permission.ACCESS_COARSE_LOCATION] == PackageManager.PERMISSION_GRANTED &&
+                        permissionMap[Manifest.permission.READ_EXTERNAL_STORAGE] == PackageManager.PERMISSION_GRANTED &&
+                        permissionMap[Manifest.permission.WRITE_EXTERNAL_STORAGE] == PackageManager.PERMISSION_GRANTED) {
+
+                        Log.d("Permissions", "All permissions granted")
+                    } else {
+                        Log.d("Permissions", "Some permissions not granted ask again")
+                        //permission is denied (this is the first time, when "never ask again" is not checked) so ask again explaining the usage of permission
+                        // shouldShowRequestPermissionRationale will return true
+                        //show the dialog or snackbar saying its necessary and try again otherwise proceed with setup.
+
+                        if (ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.ACCESS_FINE_LOCATION) ||
+                            ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.ACCESS_COARSE_LOCATION) ||
+                            ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.READ_EXTERNAL_STORAGE) ||
+                            ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+                            showDialogOK("Location and Storage Permission required for this app") { dialog, which ->
+                                when (which) {
+                                    DialogInterface.BUTTON_POSITIVE -> checkPermissions()
+                                    DialogInterface.BUTTON_NEGATIVE -> {
+                                        dialog.dismiss()
+                                    }
+                                }
+                            }
+                        } else {
+                            //permission is denied (and never ask again is  checked)
+                            //shouldShowRequestPermissionRationale will return false
+                            Toast.makeText(this, "Go to settings and enable permissions", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    //Dialog for permissions if permission not granted
+    private fun showDialogOK(message: String, okListener: DialogInterface.OnClickListener) {
+        MaterialAlertDialogBuilder(this)
+            .setMessage(message)
+            .setPositiveButton("OK", okListener)
+            .setNegativeButton("Cancel", okListener)
+            .create()
+            .show()
     }
 
     private fun discoverPeers() {
@@ -152,7 +266,10 @@ class MainActivity : AppCompatActivity() {
             peersList.addAll(wifiP2pDeviceList.deviceList)
 
             deviceNameArray = arrayOf(arrayOf(wifiP2pDeviceList.deviceList.size).toString())
-            deviceArray = arrayOf(wifiP2pDeviceList.deviceList as WifiP2pDevice)
+
+            deviceArray = (arrayOfNulls<WifiP2pDevice>(wifiP2pDeviceList.deviceList.size)) as Array<WifiP2pDevice>
+
+//            deviceArray = arrayOf<WifiP2pDevice>(wifiP2pDeviceList.deviceList.size as WifiP2pDevice)
             Log.e("Device", deviceNameArray.toString())
             Log.e("Device", deviceArray.size.toString())
             val index = 0
@@ -213,7 +330,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     //Server Connection Class
-    class ServerConnection() : Thread() {
+    class ServerConnection : Thread() {
         var serverSocket : ServerSocket? = null
         var socket: Socket? = null
         var inputStream: InputStream? = null
@@ -245,7 +362,7 @@ class MainActivity : AppCompatActivity() {
                 val buffer = ByteArray(1024)
                 var bytes : Int
 
-                var isSocket = true
+                val isSocket = true
 
                 while (isSocket) {
                     try {
@@ -254,7 +371,7 @@ class MainActivity : AppCompatActivity() {
                             val finalBytes: Int = bytes
                             handler.post(Runnable {
                                 val tempMessage = String(buffer, 0, finalBytes)
-                                messageText.text = tempMessage
+                                receivedMessageText.text = tempMessage
                             })
                         }
                     } catch (e: IOException) {
@@ -297,19 +414,22 @@ class MainActivity : AppCompatActivity() {
             val handler = Handler(Looper.getMainLooper())
 
             executor.execute(Runnable {
+//                val file = File(fileUri)
                 val buffer = ByteArray(1024)
 
+//                var fileBytes : ByteArray
                 var bytesRead: Int
 
                 var isSocket = true
                 while (isSocket) {
                     try {
+//                        fileBytes = ByteArray(file.length().toInt())
                         bytesRead = inputStream?.read(buffer) ?: 0
                         if (bytesRead > 0) {
                             val finalBytes = bytesRead
                             handler.post {
                                 val tempMessage = String(buffer, 0, finalBytes)
-                                messageText.text = tempMessage
+                                receivedMessageText.text = tempMessage
                             }
                         }
                     } catch (e: Exception) {
@@ -321,4 +441,55 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.KITKAT)
+    private fun filePicker() {
+        val mimeTypes: Array<String> = arrayOf("image/*", "video/*", "application/pdf", "audio/*")
+
+        //Check for read file permission
+        if (ContextCompat.checkSelfPermission(this,
+                Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            // Permission is not granted
+            // Should we show an explanation?
+            // No explanation needed, we can request the permission.
+            ActivityCompat.requestPermissions(this,
+                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), 1)
+        } else {
+            // create the intent to open file picker, add the desired file types to our picker and select the option that
+            // the files be openable on the phone
+            val intent = Intent()
+                .setType("*/*")
+                .setAction(Intent.ACTION_GET_CONTENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+
+            activityLauncher.launch(intent)
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.KITKAT)
+    private val activityLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult(),
+    ActivityResultCallback { result ->
+        when (result.resultCode) {
+            Activity.RESULT_OK -> {
+                val intentData : Intent? = result.data!!
+
+                if (intentData != null) {
+                    val selectedFiles = intentData.data
+
+                    // Helper method, refer to FilePickerHelper getPath() method
+                    val selectedPath = FilePickerHelper.getPath(this, selectedFiles!!)
+                    Log.e("Path", "$selectedPath")
+
+                    pickedFilePathTextId.text = selectedPath
+                    fileUri = selectedPath!!
+                }
+            }
+            RESULT_CANCELED -> {
+                Toast.makeText(this, "File choosing cancelled", Toast.LENGTH_SHORT).show()
+            }
+            else -> {
+                Toast.makeText(this, "Error with choosing this file", Toast.LENGTH_SHORT).show()
+            }
+        }
+    })
 }

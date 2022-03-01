@@ -159,7 +159,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (listPermissionsNeeded.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, listPermissionsNeeded.toTypedArray(), REQUEST_ID_MULTIPLE_PERMISSIONS)
+            ActivityCompat.requestPermissions(this, listPermissionsNeeded.toTypedArray(),
+                REQUEST_ID_MULTIPLE_PERMISSIONS)
             return false
         }
         return true
@@ -212,7 +213,8 @@ class MainActivity : AppCompatActivity() {
                         } else {
                             //permission is denied (and never ask again is  checked)
                             //shouldShowRequestPermissionRationale will return false
-                            Toast.makeText(this, "Go to settings and enable permissions", Toast.LENGTH_LONG).show()
+                            Toast.makeText(this, "Go to settings and enable permissions",
+                                Toast.LENGTH_LONG).show()
                         }
                     }
                 }
@@ -279,7 +281,8 @@ class MainActivity : AppCompatActivity() {
                 deviceArray[index] = device
             }
 
-            val adapter: ArrayAdapter<String> = ArrayAdapter(applicationContext, android.R.layout.simple_list_item_1, deviceNameArray)
+            val adapter: ArrayAdapter<String> = ArrayAdapter(applicationContext, android.R.layout.simple_list_item_1,
+                deviceNameArray)
             devicesListViewId.adapter = adapter
 
             if (peersList.size == 0) {
@@ -414,16 +417,16 @@ class MainActivity : AppCompatActivity() {
             val handler = Handler(Looper.getMainLooper())
 
             executor.execute(Runnable {
-//                val file = File(fileUri)
+                val file = File(fileUri)
                 val buffer = ByteArray(1024)
 
-//                var fileBytes : ByteArray
+                var fileBytes : ByteArray
                 var bytesRead: Int
 
                 var isSocket = true
                 while (isSocket) {
                     try {
-//                        fileBytes = ByteArray(file.length().toInt())
+                        fileBytes = ByteArray(file.length().toInt())
                         bytesRead = inputStream?.read(buffer) ?: 0
                         if (bytesRead > 0) {
                             val finalBytes = bytesRead

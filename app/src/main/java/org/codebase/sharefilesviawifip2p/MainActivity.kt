@@ -28,14 +28,14 @@ import com.google.android.material.textfield.TextInputEditText
 import kotlinx.android.synthetic.main.activity_main.*
 import org.codebase.sharefilesviawifip2p.broadcastreceiver.WIFIDirectBroadCastReceiver
 import org.codebase.sharefilesviawifip2p.filepickerhelper.FilePickerHelper
-import java.io.File
-import java.io.IOException
-import java.io.InputStream
-import java.io.OutputStream
+import org.codebase.sharefilesviawifip2p.filepickerhelper.FileTypePathPicker.Companion.getPublicStorageDir
+import org.codebase.sharefilesviawifip2p.filepickerhelper.FileTypePathPicker.Companion.isExternalStorageWritable
+import java.io.*
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -44,12 +44,14 @@ import java.util.concurrent.Executors
 lateinit var receivedMessageText: TextView
 @SuppressLint("StaticFieldLeak")
 lateinit var messageEditText: TextInputEditText
-private var fileUri: String? = ""
 
 @RequiresApi(Build.VERSION_CODES.JELLY_BEAN)
 
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        private var fileUri: String = ""
+    }
     val REQUEST_ID_MULTIPLE_PERMISSIONS = 1
     private var wifiP2pManager: WifiP2pManager? = null
     private var wifiChannel : WifiP2pManager.Channel? = null
@@ -111,16 +113,31 @@ class MainActivity : AppCompatActivity() {
             val executorService: ExecutorService = Executors.newSingleThreadExecutor()
             val message = messageEditTextId.text.toString()
 
+            val file = fileUri
+            Log.e("File", "$file")
+
             executorService.execute(Runnable {
-                if (message.isNotEmpty() && isHost) {
-                    serverConnection.writeMessage(message.encodeToByteArray())
-                } else if (message.isNotEmpty() && !isHost) {
-                    clientClass.writeMessage(message.encodeToByteArray())
+//                if (message.isNotEmpty() && isHost) {
+//                    serverConnection.writeMessage(file!!.encodeToByteArray())
+//                } else if (message.isNotEmpty() && !isHost) {
+//                    clientClass.writeMessage(file!!.encodeToByteArray())
+//                } else {
+//                    Log.e("File", "File not sent")
+////                    messageEditTextId.error = "Enter Message First"
+//                }
+                if (isHost) {
+                    Log.e("File", "Host")
+
+                    serverConnection.writeMessage(file!!.encodeToByteArray())
+                } else if (!isHost) {
+                    Log.e("File", "Client")
+
+                    clientClass.writeMessage(file!!.encodeToByteArray())
                 } else {
-                    messageEditTextId.error = "Enter Message First"
+                    Log.e("File", "File not sent")
                 }
             })
-            messageEditText.setText("")
+//            messageEditText.setText("")
         }
 
         //FilePicker Button Click listener
@@ -299,6 +316,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.KITKAT)
+
     val connectionInfoListener = WifiP2pManager.ConnectionInfoListener { wifiP2pInfo ->
         val groupOwnerAddress: InetAddress = wifiP2pInfo.groupOwnerAddress
 
@@ -332,6 +351,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.KITKAT)
+
     //Server Connection Class
     class ServerConnection : Thread() {
         var serverSocket : ServerSocket? = null
@@ -341,6 +362,7 @@ class MainActivity : AppCompatActivity() {
 
         fun writeMessage(byteArray: ByteArray) {
             try {
+
                 outPutStream!!.write(byteArray)
             } catch (e: IOException) {
                 e.printStackTrace()
@@ -362,25 +384,84 @@ class MainActivity : AppCompatActivity() {
             val handler = Handler(Looper.getMainLooper())
 
             executorService.execute(Runnable {
-                val buffer = ByteArray(1024)
-                var bytes : Int
 
-                val isSocket = true
+                if (isExternalStorageWritable()) {
+                    val totalFileNameSizeInBytes: Int
+                    val totalFileSizeInBytes: Int
 
-                while (isSocket) {
-                    try {
-                        bytes = inputStream?.read(buffer) ?: 0
-                        if (bytes > 0) {
-                            val finalBytes: Int = bytes
-                            handler.post(Runnable {
-                                val tempMessage = String(buffer, 0, finalBytes)
-                                receivedMessageText.text = tempMessage
-                            })
+                    Log.e("Received", "Here")
+                    // File name string size
+                    val fileNameSizebuffer = ByteArray(4) // Only 4 bytes needed for this operation, int => 4 bytes
+                    inputStream!!.read(fileNameSizebuffer, 0, 4)
+                    var fileSizeBuffer = ByteBuffer.wrap(fileNameSizebuffer)
+                    totalFileNameSizeInBytes = fileSizeBuffer.int
+
+                    // String of file name
+                    val fileNamebuffer = ByteArray(1024)
+                    inputStream!!.read(fileNamebuffer, 0, totalFileNameSizeInBytes)
+                    val fileName = String(fileNamebuffer, 0, totalFileNameSizeInBytes)
+
+                    // File size integer bytes
+                    val fileSizebuffer = ByteArray(4) // int => 4 bytes
+                    inputStream!!.read(fileSizebuffer, 0, 4)
+                    fileSizeBuffer = ByteBuffer.wrap(fileSizebuffer)
+                    totalFileSizeInBytes = fileSizeBuffer.int
+
+                    // The actual file bytes
+                    val baos = ByteArrayOutputStream()
+                    val buffer = ByteArray(1024)
+                    var read: Int
+                    var totalBytesRead = 0
+                    read = inputStream!!.read(buffer, 0, buffer.size)
+                    while (read != -1) {
+                        Log.e("Received while", "Here")
+
+                        baos.write(buffer, 0, read)
+                        totalBytesRead += read
+                        if (totalBytesRead == totalFileSizeInBytes) {
+                            break
                         }
-                    } catch (e: IOException) {
-                        e.printStackTrace()
+                        read = inputStream!!.read(buffer, 0, buffer.size)
                     }
+                    baos.flush()
+
+                    handler.post(Runnable {
+                        val saveFile = getPublicStorageDir(fileName)
+                        if (saveFile.exists()) {
+                            Log.e("Received if", "Here")
+
+                            saveFile.delete()
+                        }
+
+                        val fos = FileOutputStream(saveFile.path)
+                        fos.write(baos.toByteArray())
+                        fos.close()
+                    })
+
                 }
+                sleep(5000)
+                inputStream?.close()
+                outPutStream?.close()
+                socket?.close()
+//                val buffer = ByteArray(1024)
+//                var bytes : Int
+//
+//                val isSocket = true
+//
+//                while (isSocket) {
+//                    try {
+//                        bytes = inputStream?.read(buffer) ?: 0
+//                        if (bytes > 0) {
+//                            val finalBytes: Int = bytes
+//                            handler.post(Runnable {
+//                                val tempMessage = String(buffer, 0, finalBytes)
+//                                receivedMessageText.text = tempMessage
+//                            })
+//                        }
+//                    } catch (e: IOException) {
+//                        e.printStackTrace()
+//                    }
+//                }
             })
         }
     }
@@ -396,7 +477,32 @@ class MainActivity : AppCompatActivity() {
 
         fun writeMessage(byteArray: ByteArray) {
             try {
-                outPutStream!!.write(byteArray)
+                val file = File(fileUri)
+                Log.e("File", "$file")
+                var fileBytes = byteArray
+                fileBytes = ByteArray(file.length().toInt())
+                val bis = BufferedInputStream(FileInputStream(file))
+                bis.read(fileBytes, 0, fileBytes.size)
+                bis.close()
+
+//              Get the size of file name
+                val fileNameSize = ByteBuffer.allocate(4)
+                fileNameSize.putInt(file.name.toByteArray().size)
+
+//              Get the size of actual complete file
+                val fileSize = ByteBuffer.allocate(4)
+                fileSize.putInt(fileBytes.size)
+
+                outPutStream?.write(fileNameSize.array())
+                outPutStream?.write(file.name.toByteArray())
+                outPutStream?.write(fileSize.array())
+                outPutStream?.write(fileBytes)
+
+                sleep(500)
+                outPutStream?.close()
+                inputStream?.close()
+                socket.close()
+//                outPutStream!!.write(byteArray)
             } catch (e: IOException) {
                 e.printStackTrace()
             }
@@ -417,16 +523,16 @@ class MainActivity : AppCompatActivity() {
             val handler = Handler(Looper.getMainLooper())
 
             executor.execute(Runnable {
-                val file = File(fileUri)
+                // Creating a File object containing the file contents, and converting into byte array
+
                 val buffer = ByteArray(1024)
 
-                var fileBytes : ByteArray
                 var bytesRead: Int
 
                 var isSocket = true
                 while (isSocket) {
                     try {
-                        fileBytes = ByteArray(file.length().toInt())
+
                         bytesRead = inputStream?.read(buffer) ?: 0
                         if (bytesRead > 0) {
                             val finalBytes = bytesRead

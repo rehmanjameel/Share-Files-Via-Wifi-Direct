@@ -6,6 +6,8 @@ import android.content.Intent
 import android.net.NetworkInfo
 import android.net.wifi.p2p.WifiP2pDeviceList
 import android.net.wifi.p2p.WifiP2pManager
+import android.os.Build
+import androidx.annotation.RequiresApi
 import kotlinx.android.synthetic.main.activity_main.*
 import org.codebase.sharefilesviawifip2p.MainActivity
 
@@ -13,6 +15,7 @@ class WIFIDirectBroadCastReceiver(private val manager: WifiP2pManager,
                                   private val channel: WifiP2pManager.Channel,
                                   private val activity: MainActivity) : BroadcastReceiver() {
 
+    @RequiresApi(Build.VERSION_CODES.JELLY_BEAN)
     override fun onReceive(context: Context?, intent: Intent?) {
         val action: String = intent?.action!!
 

@@ -339,7 +339,7 @@ class MainActivity : AppCompatActivity() {
         val groupOwnerAddress: InetAddress = wifiP2pInfo.groupOwnerAddress
 
         if (wifiP2pInfo.groupFormed && wifiP2pInfo.isGroupOwner) {
-            connectionStatusId.text = "Host"
+//            connectionStatusId.text = "Host"
             isHost = true
             serverConnection = FileServerAsyncTask(context, connectionStatusId).execute() as FileServerAsyncTask
 //            serverConnection.start()
@@ -533,7 +533,7 @@ class MainActivity : AppCompatActivity() {
     }*/
 
 
-//    @SuppressLint("StaticFieldLeak")
+    @SuppressLint("StaticFieldLeak")
     class FileServerAsyncTask(
          private val context: Context, statusText: TextView
     ) : AsyncTask<Void, Void, String?>() {
@@ -555,22 +555,24 @@ class MainActivity : AppCompatActivity() {
                  * Save the input stream from the client as a JPEG file
                  */
                 val f = File(
-                    Environment.getExternalStorageDirectory().absolutePath +
+                    context.getExternalFilesDir("received")?.absolutePath +
                         "/${context.packageName}/wifip2pshared-${System.currentTimeMillis()}.jpg")
-                val dirs = File(f.parent)
-
-                dirs.takeIf { it.doesNotExist() }?.apply {
-                    mkdirs()
+                val dirs = File(f.path)
+                if (!dirs.exists()) {
+                    dirs.mkdirs()
                 }
-//                f.createNewFile()
+//                dirs.takeIf { it.doesNotExist() }?.apply {
+//                    mkdirs()
+//                }
+                f.createNewFile()
                 val inputstream = client.getInputStream()
                 copyFile(inputstream, FileOutputStream(f))
                 serverSocket.close()
-                f.absolutePath
+                return@use f.absolutePath
             }
         }
 
-        private fun File.doesNotExist(): Boolean = !exists()
+//        private fun File.doesNotExist(): Boolean = !exists()
 
         /**
          * Start activity that can handle the JPEG image
@@ -731,7 +733,7 @@ class MainActivity : AppCompatActivity() {
             // create the intent to open file picker, add the desired file types to our picker and select the option that
             // the files be openable on the phone
             val intent = Intent()
-                .setType("*/*")
+                .setType("image/*")
                 .setAction(Intent.ACTION_GET_CONTENT)
                 .addCategory(Intent.CATEGORY_OPENABLE)
                 .putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
